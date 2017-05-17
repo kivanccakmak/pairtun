@@ -1,0 +1,16 @@
+#ifndef _CONFIG_H
+#define _CONFIG_H
+
+#define TUN_IFNAME "tun0"
+
+#define DESTINATION_PORT 9090
+#define DESTINATION_IP "192.168.1.107"
+
+#define PFD_IDX_IPC 0
+#define PFD_IDX_TUN 1
+
+#define PFD_IDX_NET_FIRST 2
+#define MAX_NUM_NET_FDS 8
+#define PFD_NUM_FDS PFD_IDX_NET_FIRST + MAX_NUM_NET_FDS
+
+#endif
