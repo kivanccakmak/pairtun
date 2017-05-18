@@ -27,17 +27,20 @@ struct remote {
     int port;
     int fds[MAX_NUM_NET_FDS];
     int num_actives;
-    int (*packet_handler) (struct remote *remote, struct pqueue_t *pq);
+    int (*packet_handler) (int fd, int flag, struct pqueue_t *pq);
+    void (*destroy) (struct remote *remote);
 };
 
 struct ipc {
-    int (*cmd_handler) (const char *cmd, struct remote *remote);
+    int (*cmd_handler) (struct ipc *ipc, struct remote *remote);
     int fd;
+    void (*destroy) (struct ipc *ipc);
 };
 
 struct tun {
-    int (*packet_handler) (struct tun *tun, struct pqueue_t *pq);
+    int (*packet_handler) (int fd, struct pqueue_t *pq);
     int fd;
+    void (*destroy) (struct tun *tun);
 };
 
 struct pair_tun {
@@ -47,6 +50,7 @@ struct pair_tun {
     struct pollfd *pfd;
     struct pqueue_t *pq;
     int poll_msec;
+    void (*destroy) (struct pair_tun *ptun);
 };
 
 /**
@@ -204,6 +208,9 @@ static int init_pair_tun (struct pair_tun *ptun)
         ptun_errorf("failed to allocate fds");
         goto bail;
     }
+
+    //TODO: init priority queue
+
     memset(ptun->pfd, 0, PFD_NUM_FDS * sizeof(struct pollfd));
 
     ptun->pfd[PFD_IDX_IPC].fd = ptun->ipc.fd;
@@ -213,7 +220,7 @@ static int init_pair_tun (struct pair_tun *ptun)
     ptun->pfd[PFD_IDX_TUN].events = POLLIN;
 
     ptun->pfd[PFD_IDX_NET_FIRST].fd = ptun->remote.fds[0];
-    ptun->pfd[PFD_IDX_NET_FIRST].events = POLLOUT;
+    ptun->pfd[PFD_IDX_NET_FIRST].events = POLLIN || POLLOUT;
 
     ptun->poll_msec = POLL_MSEC * 1000;
 
@@ -233,22 +240,63 @@ int main (int argc, char *argv[])
 {
     int ret;
     struct pair_tun ptun;
-
     memset(&ptun, 0, sizeof(struct pair_tun));
+
     ret = init_pair_tun(&ptun);
     if (ret != 0) {
         ptun_errorf("initialization failed");
         goto bail;
     }
 
+    //task loop
     while (1) {
         int nfds_ready = poll(ptun.pfd, PFD_NUM_FDS, ptun.poll_msec);
+        int i = 0;
 
-        if (ptun.pfd[PFD_IDX_IPC].events & POLLIN) {
+        if (nfds_ready < 0) {ptun_errorf("poll() [%s]", strerror(errno)); continue;}
+        ptun_debugf("nfds_ready: %d", nfds_ready);
+
+        if (ptun.pfd[PFD_IDX_IPC].revents & POLLIN) {
+            if (ptun.ipc.cmd_handler == NULL) {
+                ptun_errorf("lack of command handler for ipc packets");
+                goto bail;
+            }
+            ret = ptun.ipc.cmd_handler(&ptun.ipc, &ptun.remote);
+        }
+
+        if (ptun.pfd[PFD_IDX_TUN].revents & POLLIN) {
+            if (ptun.ipc.cmd_handler == NULL) {
+                ptun_errorf("lack of packet_handler for tun iface");
+                goto bail;
+            }
+            ret = ptun.tun.packet_handler(ptun.tun.fd, ptun.pq);
+        }
+
+        while (i < ptun.remote.num_actives) {
+            int index = i + PFD_IDX_NET_FIRST;
+            if (ptun.remote.packet_handler == NULL) {
+                ptun_errorf("lack of packet_handler for network iface");
+                goto bail;
+            }
+            if (ptun.pfd[index].revents & POLLIN) {
+                ptun_infof("POLLIN");
+                ret = ptun.remote.packet_handler(ptun.pfd[index].fd, POLLIN, ptun.pq);
+            } else if (ptun.pfd[index].revents & POLLOUT) {
+                ptun_infof("POLLOUT");
+                ret = ptun.remote.packet_handler(ptun.pfd[index].fd, POLLOUT, ptun.pq);
+            }
+            i += 1;
+        }
+
+        ptun_infof("here");
+        if (!nfds_ready) {
+            ptun_debugf("woke up due to timeout");
         }
     }
 
     return 0;
 bail:
+    //TODO: ptun.destroy(&ptun); (calls remote-ipc-tun destroy, free priority
+    //queue and malloced poll pointer)
     return -1;
 }
