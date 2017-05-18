@@ -1,7 +1,8 @@
 CC=gcc
 TARGET=ptun
-DEP=debug.c
 SRC=ptun.c
+DEP=debug.c \
+	pqueue.c \
 
 default: all
 

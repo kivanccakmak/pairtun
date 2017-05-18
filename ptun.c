@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/un.h>
 #include <net/if.h>
 #include <linux/if_tun.h>
 #include <sys/types.h>
@@ -17,6 +18,8 @@
 
 #include "config.h"
 #include "debug.h"
+#include "commons.h"
+#include "pqueue.h"
 
 struct remote {
     struct sockaddr_in addr;
@@ -24,24 +27,38 @@ struct remote {
     int port;
     int fds[MAX_NUM_NET_FDS];
     int num_actives;
+    int (*packet_handler) (struct remote *remote, struct pqueue_t *pq);
+};
+
+struct ipc {
+    int (*cmd_handler) (const char *cmd, struct remote *remote);
+    int fd;
+};
+
+struct tun {
+    int (*packet_handler) (struct tun *tun, struct pqueue_t *pq);
+    int fd;
 };
 
 struct pair_tun {
     struct remote remote;
-    int tun_fd;
-    int ipc_fd;
+    struct ipc ipc;
+    struct tun tun;
     struct pollfd *pfd;
+    struct pqueue_t *pq;
+    int poll_msec;
 };
 
 /**
  * @brief 
  *
+ * @param[out] tun
  * @param[in] dev
  * @param[in] flags
  *
  * @return 
  */
-static int tun_alloc(char *dev, int flags) 
+static int init_tun (struct tun *tun, char *dev, int flags)
 {
     struct ifreq ifr;
     int fd, ret;
@@ -67,9 +84,62 @@ static int tun_alloc(char *dev, int flags)
         ptun_errorf("failed to set tun iface [%s]", strerror(errno));
         goto bail;
     }
-    return fd;
+
+    tun->fd = fd;
+    tun->packet_handler = NULL;
+    return 0;
 bail:
-  return -1;
+    close(fd);
+    return -1;
+}
+
+/**
+ * @brief
+ *
+ * @param[out] ipc
+ *
+ * @return
+ */
+static int init_ipc_socket (struct ipc *ipc)
+{
+    int fd;
+    int ret, yes = 1;
+    struct sockaddr_un addr;
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == -1) {
+        ptun_errorf("failed to init ipc socket [%s]", strerror(errno));
+        goto bail;
+    }
+
+    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+    if (ret == -1) {
+        ptun_errorf("failed to setsockopt [%s]", strerror(errno));
+        goto bail;
+    }
+
+    addr.sun_family = AF_UNIX;
+    memset(addr.sun_path, '\0', 108);
+    memcpy(addr.sun_path, IPC_SUN_PATH, IPC_SUN_PATH_LEN);
+
+    ret = bind(fd, (struct sockaddr *) &addr, sizeof(addr));
+    if (ret == -1) {
+        ptun_errorf("failed to bind [%s]", strerror(errno));
+        goto bail;
+    }
+
+    ret = listen(fd, 0);
+    if (ret == -1) {
+        ptun_errorf("failed to listen [%s]", strerror(errno));
+        goto bail;
+    }
+
+    ipc->fd = fd;
+    ipc->cmd_handler = NULL;
+    return 0;
+bail:
+    close(fd);
+    return -1;
 }
 
 /**
@@ -105,17 +175,17 @@ static int init_remote_connection (struct remote *remote, const char *ip, int po
     ptun_debugf("succesfully connected to %s", ip);
     return 0;
 bail:
-    if (remote->fds[0] != -1) {close(remote->fds[0]);}
+    close(remote->fds[0]);
     return -1;
 }
 
 static int init_pair_tun (struct pair_tun *ptun)
 {
     int ret;
-    int i;
+    ptun->pfd = NULL;
 
-    ptun->tun_fd = tun_alloc(TUN_IFNAME, IFF_TUN);
-    if (ptun->tun_fd < 0) {
+    ret = init_tun(&ptun->tun, TUN_IFNAME, IFF_TUN);
+    if (ret < 0) {
         goto bail;
     }
 
@@ -124,23 +194,33 @@ static int init_pair_tun (struct pair_tun *ptun)
         goto bail;
     }
 
+    ret = init_ipc_socket(&ptun->ipc);
+    if (ret != 0) {
+        goto bail;
+    }
+
     ptun->pfd = (struct pollfd*) malloc(PFD_NUM_FDS * sizeof(struct pollfd));
+    if (ptun->pfd == NULL) {
+        ptun_errorf("failed to allocate fds");
+        goto bail;
+    }
     memset(ptun->pfd, 0, PFD_NUM_FDS * sizeof(struct pollfd));
 
-    //TODO: initialize ipc_fd
-    ptun->pfd[PFD_IDX_IPC].fd = ptun->ipc_fd;
+    ptun->pfd[PFD_IDX_IPC].fd = ptun->ipc.fd;
     ptun->pfd[PFD_IDX_IPC].events = POLLIN;
     
-    ptun->pfd[PFD_IDX_TUN].fd = ptun->tun_fd;
+    ptun->pfd[PFD_IDX_TUN].fd = ptun->tun.fd;
     ptun->pfd[PFD_IDX_TUN].events = POLLIN;
 
     ptun->pfd[PFD_IDX_NET_FIRST].fd = ptun->remote.fds[0];
     ptun->pfd[PFD_IDX_NET_FIRST].events = POLLOUT;
 
+    ptun->poll_msec = POLL_MSEC * 1000;
+
     return 0;
 bail:
+    sfree(ptun->pfd);
     return -1;
-
 }
 
 static void usage ()
@@ -161,8 +241,14 @@ int main (int argc, char *argv[])
         goto bail;
     }
 
+    while (1) {
+        int nfds_ready = poll(ptun.pfd, PFD_NUM_FDS, ptun.poll_msec);
+
+        if (ptun.pfd[PFD_IDX_IPC].events & POLLIN) {
+        }
+    }
+
     return 0;
 bail:
-    if (ptun.tun_fd != -1) {close(ptun.tun_fd);}
     return -1;
 }

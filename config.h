@@ -3,6 +3,9 @@
 
 #define TUN_IFNAME "tun0"
 
+#define IPC_SUN_PATH "\0ptun"
+#define IPC_SUN_PATH_LEN 5
+
 #define DESTINATION_PORT 9090
 #define DESTINATION_IP "192.168.1.107"
 
@@ -12,5 +15,7 @@
 #define PFD_IDX_NET_FIRST 2
 #define MAX_NUM_NET_FDS 8
 #define PFD_NUM_FDS PFD_IDX_NET_FIRST + MAX_NUM_NET_FDS
+
+#define POLL_MSEC 10
 
 #endif
