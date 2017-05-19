@@ -1,7 +1,10 @@
 CC=gcc
 TARGET=ptun
 SRC=ptun.c
-DEP=debug.c \
+DEP=net_sock.c \
+	ipc_sock.c \
+	tun_sock.c \
+	debug.c \
 	pqueue.c \
 
 default: all
