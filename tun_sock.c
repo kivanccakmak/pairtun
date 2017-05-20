@@ -20,6 +20,11 @@ static void destroy_tun_sock(struct tun *tun)
     }
 }
 
+static int handle_tun_packet(int fd, struct pqueue_t *pq)
+{
+    return 0;
+}
+
 /**
  * @brief 
  *
@@ -33,6 +38,10 @@ int init_tun_sock(struct tun *tun, char *dev)
     struct ifreq ifr;
     int fd, ret;
     char *clonedev = "/dev/net/tun";
+
+    tun->fd = fd;
+    tun->packet_handler = &handle_tun_packet;
+    tun->destroy = &destroy_tun_sock;
 
     if (dev == NULL) {
         ptun_errorf("device name is null");
@@ -55,9 +64,7 @@ int init_tun_sock(struct tun *tun, char *dev)
         goto bail;
     }
 
-    tun->fd = fd;
-    tun->packet_handler = NULL;
-    tun->destroy = &destroy_tun_sock;
+    ptun_infof("succesfully created tun");
     return 0;
 bail:
     close(fd);

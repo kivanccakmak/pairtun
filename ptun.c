@@ -14,24 +14,22 @@
 #include "debug.h"
 
 struct pair_tun {
-    struct remote remote;
+    int poll_msec;
+    struct pollfd *pfd;
     struct ipc ipc;
     struct tun tun;
-    struct pollfd *pfd;
+    struct remote remote;
     struct pqueue_t *pq;
-    int poll_msec;
     void (*destroy) (struct pair_tun *ptun);
 };
 
 static void destroy_pair_tun(struct pair_tun *ptun)
 {
     ptun_infof("entering");
-    ptun->remote.destroy(&ptun->remote);
-    ptun->ipc.destroy(&ptun->ipc);
-    ptun->tun.destroy(&ptun->tun);
-    if (ptun->pq != NULL) {
-        pqueue_free(ptun->pq);
-    }
+    if (ptun->ipc.destroy) {ptun->ipc.destroy(&ptun->ipc);}
+    if (ptun->tun.destroy) {ptun->tun.destroy(&ptun->tun);}
+    if (ptun->remote.destroy) {ptun->remote.destroy(&ptun->remote);}
+    if (ptun->pq != NULL) {pqueue_free(ptun->pq);}
     sfree(ptun->pfd);
 }
 
@@ -49,16 +47,16 @@ static int init_pair_tun(struct pair_tun *ptun)
     memset(ptun->pfd, 0, PFD_NUM_FDS * sizeof(struct pollfd));
     ptun->destroy = &destroy_pair_tun;
 
+    // to get cli commands
+    ret = init_ipc_connection(&ptun->ipc);
+    if (ret != 0) {goto bail;}
+
     // to get intercepted packets
     ret = init_tun_sock(&ptun->tun, TUN_IFNAME);
     if (ret < 0) {goto bail;}
 
     // to forward intercepted packets through network
     ret = init_remote_sock(&ptun->remote, DESTINATION_IP, DESTINATION_PORT);
-    if (ret != 0) {goto bail;}
-
-    // to get cli commands
-    ret = init_ipc_connection(&ptun->ipc);
     if (ret != 0) {goto bail;}
 
     ptun->pfd[PFD_IDX_IPC].fd = ptun->ipc.fd;
@@ -115,7 +113,6 @@ static int task_loop(struct pair_tun *ptun)
     while (1) {
         int nfds_ready, i = 0;
         nfds_ready = poll(ptun->pfd, PFD_NUM_FDS, ptun->poll_msec);
-        i = 0;
 
         if (nfds_ready < 0) {
             ptun_errorf("poll() [%s]", strerror(errno));

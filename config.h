@@ -18,4 +18,6 @@
 
 #define POLL_MSEC 1000
 
+#define MAX_IPC_MSG_SIZE 1024
+
 #endif

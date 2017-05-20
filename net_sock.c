@@ -9,14 +9,11 @@
 #include "debug.h"
 #include "net_sock.h"
 
-static void destroy_net_sock(struct remote *remote)
+static int handle_net_packet(int fd, int flag, struct pqueue_t *pq)
 {
-    int i;
-    ptun_infof("entering");
-    for (i = 0; i < remote->num_actives; i++) {
-        ptun_debugf("close connection %d", i);
-        close(remote->fds[i]);
-    }
+    //TODO: if (pollin) {recv, insert to queue}
+    //TODO: if (pollout) {get from queue, send}
+    return 0;
 }
 
 static int add_net_sock(struct remote *remote)
@@ -69,6 +66,16 @@ bail:
     return -1;
 }
 
+static void destroy_net_sock(struct remote *remote)
+{
+    int i;
+    ptun_infof("entering");
+    for (i = 0; i < remote->num_actives; i++) {
+        ptun_debugf("close network connection %d", i);
+        close(remote->fds[i]);
+    }
+}
+
 /**
  * @brief connect to remote device
  *
@@ -85,6 +92,12 @@ int init_remote_sock(struct remote *remote, const char *ip, int port)
     remote->addr.sin_family = AF_INET;
     remote->addr.sin_addr.s_addr = inet_addr(ip);
     remote->addr.sin_port = htons(port);
+    remote->num_actives = 0;
+
+    remote->packet_handler = &handle_net_packet;
+    remote->add_connection = &add_net_sock;
+    remote->close_connection = &close_net_sock;
+    remote->destroy = &destroy_net_sock;
 
     remote->fds[0] = socket(AF_INET, SOCK_STREAM, 0);
     if (remote->fds[0] < 0) {
@@ -98,12 +111,9 @@ int init_remote_sock(struct remote *remote, const char *ip, int port)
         ptun_errorf("failed to connect [%s]", strerror(errno));
         goto bail;
     }
+
     remote->num_actives = 1;
     ptun_debugf("succesfully connected to %s", ip);
-
-    remote->destroy = &destroy_net_sock;
-    remote->add_connection = &add_net_sock;
-    remote->close_connection = &close_net_sock;
     return 0;
 bail:
     close(remote->fds[0]);
