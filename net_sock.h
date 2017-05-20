@@ -14,6 +14,7 @@ struct remote {
     int num_actives;
     int (*packet_handler) (int fd, int flag, struct pqueue_t *pq);
     int (*add_connection) (struct remote *remote);
+    int (*get_num_active_fds) (struct remote *remote);
     int (*close_connection) (struct remote *remote);
     void (*destroy) (struct remote *remote);
 };

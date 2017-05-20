@@ -7,6 +7,7 @@ struct ipc {
     int fd;
     struct remote *remote;
     int (*cmd_handler) (struct ipc *ipc);
+    int (*get_num_active_fds) (struct ipc *ipc);
     void (*destroy) (struct ipc *ipc);
 };
 

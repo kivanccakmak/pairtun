@@ -12,17 +12,23 @@
 #include "debug.h"
 #include "tun_sock.h"
 
+static int handle_tun_packet(int fd, struct pqueue_t *pq)
+{
+    ptun_infof("entering");
+    return 0;
+}
+
+static int get_num_active_fds(struct tun *tun)
+{
+    return 1;
+}
+
 static void destroy_tun_sock(struct tun *tun)
 {
     ptun_infof("entering");
     if (tun->fd != -1) {
         close(tun->fd);
     }
-}
-
-static int handle_tun_packet(int fd, struct pqueue_t *pq)
-{
-    return 0;
 }
 
 /**
@@ -41,6 +47,7 @@ int init_tun_sock(struct tun *tun, char *dev)
 
     tun->fd = fd;
     tun->packet_handler = &handle_tun_packet;
+    tun->get_num_active_fds = &get_num_active_fds;
     tun->destroy = &destroy_tun_sock;
 
     if (dev == NULL) {

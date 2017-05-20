@@ -13,12 +13,14 @@ static int handle_net_packet(int fd, int flag, struct pqueue_t *pq)
 {
     //TODO: if (pollin) {recv, insert to queue}
     //TODO: if (pollout) {get from queue, send}
+    ptun_infof("entering");
     return 0;
 }
 
 static int add_net_sock(struct remote *remote)
 {
     int ret, idx;
+    ptun_infof("entering");
     if (remote->num_actives == MAX_NUM_NET_FDS) {
         ptun_infof("no more active socket allowed");
         goto bail;
@@ -50,6 +52,7 @@ bail:
 static int close_net_sock(struct remote *remote)
 {
     int ret, idx;
+    ptun_infof("entering");
     if (remote->num_actives == 0) {
         ptun_errorf("no active socket exists");
         goto bail;
@@ -64,6 +67,11 @@ static int close_net_sock(struct remote *remote)
     return 0;
 bail:
     return -1;
+}
+
+static int get_num_active_fds(struct remote *remote)
+{
+    return remote->num_actives;
 }
 
 static void destroy_net_sock(struct remote *remote)
@@ -98,6 +106,7 @@ int init_remote_sock(struct remote *remote, const char *ip, int port)
     remote->add_connection = &add_net_sock;
     remote->close_connection = &close_net_sock;
     remote->destroy = &destroy_net_sock;
+    remote->get_num_active_fds = &get_num_active_fds;
 
     remote->fds[0] = socket(AF_INET, SOCK_STREAM, 0);
     if (remote->fds[0] < 0) {

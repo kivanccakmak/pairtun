@@ -8,14 +8,6 @@
 #include "debug.h"
 #include "ipc_sock.h"
 
-static void destroy_ipc_sock(struct ipc *ipc)
-{
-    ptun_infof("entering");
-    if (ipc->fd != -1) {
-        close(ipc->fd);
-    }
-}
-
 static int recv_cmd(struct ipc *ipc)
 {
     int rc, sfd, count = 0;
@@ -47,6 +39,19 @@ bail:
     return -1;
 }
 
+static int get_num_active_fds(struct ipc *ipc)
+{
+    return 1;
+}
+
+static void destroy_ipc_sock(struct ipc *ipc)
+{
+    ptun_infof("entering");
+    if (ipc->fd != -1) {
+        close(ipc->fd);
+    }
+}
+
 /**
  * @brief would get commands and forwards to network connection
  *
@@ -61,6 +66,7 @@ int init_ipc_connection(struct ipc *ipc)
     struct sockaddr_un addr;
 
     ipc->cmd_handler = &recv_cmd;
+    ipc->get_num_active_fds = &get_num_active_fds;
     ipc->destroy = &destroy_ipc_sock;
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);

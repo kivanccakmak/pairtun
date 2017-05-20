@@ -4,6 +4,7 @@
 #include <sys/time.h>
 #include <poll.h>
 #include <errno.h>
+#include <signal.h>
 
 #include "net_sock.h"
 #include "ipc_sock.h"
@@ -14,7 +15,6 @@
 #include "debug.h"
 
 struct pair_tun {
-    int poll_msec;
     struct pollfd *pfd;
     struct ipc ipc;
     struct tun tun;
@@ -22,6 +22,17 @@ struct pair_tun {
     struct pqueue_t *pq;
     void (*destroy) (struct pair_tun *ptun);
 };
+
+static int get_num_active_fds(struct pair_tun *ptun)
+{
+    int num_actives = 0;
+    num_actives += ptun->ipc.get_num_active_fds(&ptun->ipc);
+    num_actives += ptun->tun.get_num_active_fds(&ptun->tun);
+    num_actives += ptun->remote.get_num_active_fds(&ptun->remote);
+    return num_actives;
+}
+
+struct pair_tun *g_pair_tun = NULL; //only used in signal handler
 
 static void destroy_pair_tun(struct pair_tun *ptun)
 {
@@ -31,6 +42,16 @@ static void destroy_pair_tun(struct pair_tun *ptun)
     if (ptun->remote.destroy) {ptun->remote.destroy(&ptun->remote);}
     if (ptun->pq != NULL) {pqueue_free(ptun->pq);}
     sfree(ptun->pfd);
+    ptun_infof("exit(-1)");
+    exit(-1);
+}
+
+static void sig_handler(int signo)
+{
+    ptun_infof("received %d", signo);
+    if (signo == SIGINT) {
+        destroy_pair_tun(g_pair_tun);
+    }
 }
 
 static int init_pair_tun(struct pair_tun *ptun)
@@ -39,12 +60,11 @@ static int init_pair_tun(struct pair_tun *ptun)
     ptun->pfd = NULL;
     ptun->pq = NULL;
 
-    ptun->pfd = (struct pollfd*) malloc(PFD_NUM_FDS * sizeof(struct pollfd));
+    ptun->pfd = (struct pollfd*) malloc(INITIAL_NUM_FDS * sizeof(struct pollfd));
     if (ptun->pfd == NULL) {
         ptun_errorf("failed to allocate fds");
         goto bail;
     }
-    memset(ptun->pfd, 0, PFD_NUM_FDS * sizeof(struct pollfd));
     ptun->destroy = &destroy_pair_tun;
 
     // to get cli commands
@@ -67,8 +87,6 @@ static int init_pair_tun(struct pair_tun *ptun)
 
     ptun->pfd[PFD_IDX_NET_FIRST].fd = ptun->remote.fds[0];
     ptun->pfd[PFD_IDX_NET_FIRST].events = POLLIN || POLLOUT;
-
-    ptun->poll_msec = POLL_MSEC * 1000;
 
     //TODO: init priority queue
     return 0;
@@ -110,39 +128,47 @@ static int task_loop(struct pair_tun *ptun)
     ret = check_handlers(ptun);
     if (ret != 0) {goto bail;}
 
+    signal(SIGINT, sig_handler);
+    ptun_infof("entering");
     while (1) {
         int nfds_ready, i = 0;
-        nfds_ready = poll(ptun->pfd, PFD_NUM_FDS, ptun->poll_msec);
+        int nfds = get_num_active_fds(ptun);
+        nfds_ready = poll(ptun->pfd, nfds, POLL_DURATION);
 
         if (nfds_ready < 0) {
             ptun_errorf("poll() [%s]", strerror(errno));
             continue;
         }
 
-        if (ptun->pfd[PFD_IDX_IPC].revents & POLLIN) {
+        if (nfds_ready == 0) {
+            ptun_infof("woke up due to timeout");
+        }
+
+        ptun_infof("nfds_ready: %d", nfds_ready);
+        if (nfds_ready && ptun->pfd[PFD_IDX_IPC].revents & POLLIN) {
             ret = ptun->ipc.cmd_handler(&ptun->ipc);
+            nfds_ready -= 1;
         }
 
-        if (ptun->pfd[PFD_IDX_TUN].revents & POLLIN) {
+        if (nfds_ready && ptun->pfd[PFD_IDX_TUN].revents & POLLIN) {
             ret = ptun->tun.packet_handler(ptun->tun.fd, ptun->pq);
+            nfds_ready -= 1;
         }
 
-        while (i < ptun->remote.num_actives) {
+        while (nfds_ready && i < ptun->remote.num_actives) {
             int index = i + PFD_IDX_NET_FIRST;
             if (ptun->pfd[index].revents & POLLIN) {
                 ret = ptun->remote.packet_handler(ptun->pfd[index].fd, POLLIN, ptun->pq);
             } else if (ptun->pfd[index].revents & POLLOUT) {
                 ret = ptun->remote.packet_handler(ptun->pfd[index].fd, POLLOUT, ptun->pq);
             }
+            ptun_infof("%d", ptun->pfd[index].revents);
             i += 1;
-        }
-
-        if (!nfds_ready) {
-            ptun_debugf("woke up due to timeout");
         }
     }
     return 0;
 bail:
+    ptun->destroy(ptun);
     return -1;
 }
 
@@ -158,6 +184,7 @@ int main(int argc, char *argv[])
         goto bail;
     }
 
+    g_pair_tun = &ptun;
     ret = task_loop(&ptun);
     if (ret != 0) {
         ptun_errorf("task_loop failed");
